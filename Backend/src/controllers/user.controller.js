@@ -3,6 +3,7 @@ import { asyncHandler } from "../utils/asynchandler.js";
 import { User } from "../models/user.model.js";
 import { uploadOnCloudinary } from "../utils/cloudinary.js";
 import { ApiResponse } from "../utils/ApiResponse.js"
+import jwt from "jsonwebtoken";
 
 
 const generateAccessAndRefreshTokens = async (userId) => {
@@ -22,7 +23,6 @@ const generateAccessAndRefreshTokens = async (userId) => {
         throw new ApiError(500, "Something Went wrong while generating refresh and access token")
     }
 }
-
 
 
 const registerUser = asyncHandler(async (req, res) => {
@@ -117,7 +117,7 @@ const loginUser = asyncHandler(async (req, res) => {
 
     const { email, username, password } = req.body;
 
-    if (!username || !email) {
+    if (!(username || email)) {
         throw new ApiError(400, "username or email is required");
     }
 
@@ -137,7 +137,7 @@ const loginUser = asyncHandler(async (req, res) => {
 
     const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(user._id);
 
-    const loggedInUser = User.findById(user._id).select("-password -refreshToken")
+    const loggedInUser = await User.findById(user._id).select("-password -refreshToken");
 
     const option = {
         httpOnly: true,
@@ -161,7 +161,7 @@ const logoutUser = asyncHandler(async (req, res) => {
 
 
 
-    await User.findById(req.user._id, {
+    await User.findByIdAndUpdate(req.user._id, {
         $set: {
             refreshToken: undefined
         }
@@ -180,7 +180,56 @@ const logoutUser = asyncHandler(async (req, res) => {
 })
 
 
+
+const refreshAccessToken = asyncHandler(async(req, res)=>{
+    const incomingRefreshToken = req.cookies.refreshToken ||
+    req.body.refreshToken;
+
+
+    if(!incomingRefreshToken){
+        throw new ApiError(401, "unauthorized request");
+        
+    }
+
+    try {
+        const decodedToken = jwt.verify(incomingRefreshToken, process.env.REFRESH_TOKEN_SECRET);
+    
+        const user = await User.findById(decodedToken._id);
+        if(!user){
+            throw new ApiError(401, "Invalid refresh Token");
+    
+        }
+    
+        if(incomingRefreshToken !== user?.refreshToken){
+            throw new ApiError(401, "Refresh token is expired or used");
+        }
+    
+        const options = {
+            httpOnly : true,
+            secure : true
+        }
+    
+        const {accessToken, newRefreshToken} = await generateAccessAndRefreshTokens(user._id);
+    
+        return res
+        .status(200)
+        .cookies("accessToken", accessToken, options)
+        .cookies("refreshToken", newRefreshToken, options)
+        .json(
+            new ApiResponse(200, {accessToken, refreshToken :  newRefreshToken}),
+            "Access Token refreshed"
+        )
+    } catch (error) {
+        throw new ApiError(401, error?.message  || 
+            "Invalid refresh token"
+        )
+    }
+
+
+})
+
 export {
     registerUser,
-    loginUser, logoutUser
+    loginUser, logoutUser,
+    refreshAccessToken
 } 
